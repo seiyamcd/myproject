@@ -1,0 +1,20 @@
+{
+  "name": "myproject",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@hono/node-server": "^1.19.0",
+    "axios": "^1.11.0",
+    "dotenv": "^17.2.1",
+    "hono": "^4.9.2",
+    "mysql2": "^3.14.5"
+  },
+  "description": ""
+}
