@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import 'dotenv/config'
-import mysql from 'mysql2/promise'  // ← 追加
+import mysql from 'mysql2/promise'
 
 // MySQL 接続プール
 const pool = mysql.createPool({
@@ -18,8 +18,7 @@ const app = new Hono()
 // ヘルスチェック
 app.get('/health', (c) => c.json({ ok: true }))
 
-// 一覧：DBから取得
-//  GET/categoriesが来たら非同期関数実行。アクセス時間かかるため。
+// カテゴリ一覧：DBから取得
 app.get('/categories', async (c) => {
   try {
     const [rows] = await pool.query(
@@ -32,7 +31,7 @@ app.get('/categories', async (c) => {
   }
 })
 
-// 1件：DBから取得
+// カテゴリ1件：DBから取得
 app.get('/categories/:id', async (c) => {
   const id = Number(c.req.param('id'))
   if (Number.isNaN(id)) {
@@ -53,22 +52,76 @@ app.get('/categories/:id', async (c) => {
   }
 })
 
-//カテゴリ追加API
-app.post('/admin/categories',async(c)) =>{
-  //クライアントから送られたjsのボディを取得
-  const body =await c.req.json()
-  const name =body.name
-
-  //DBにinsert
-  const [result]=await pool.query(
-   'INSERT INTO categories(name)VALUES(:name)'
-   {name} 
+// カテゴリ追加API
+app.post('/admin/categories', async (c) => {
+  const body = await c.req.json()
+  const name = body.name
+  const [result] = await pool.query(
+    'INSERT INTO categories(name) VALUES(:name)',
+    { name }
   )
-  //レスポンスを返す
-  rettuen c.json({ok:true,id:result.insertId},201)
-}
+  return c.json({ ok: true, id: result.insertId }, 201)
+})
+
+// X APIからPost取得してDBに保存
+app.post('/admin/fetch-posts', async (c) => {
+  try {
+    const bearerToken = process.env.X_BEARER_TOKEN
+    
+    if (!bearerToken) {
+      return c.json({ ok: false, error: 'X_BEARER_TOKEN not found' }, 500)
+    }
+
+    // X APIを叩く（例: 特定ユーザーのツイート取得）
+    const username = 'elonmusk' // テスト用。後で変更可能
+    const url = `https://api.twitter.com/2/tweets/search/recent?query=from:${username}&max_results=10&tweet.fields=created_at`
+    
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${bearerToken}`
+      }
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('X API Error:', errorText)
+      return c.json({ ok: false, error: 'X API request failed', details: errorText }, response.status)
+    }
+
+    const data = await response.json()
+    
+    // DBに保存
+    let savedCount = 0
+    if (data.data && data.data.length > 0) {
+      for (const tweet of data.data) {
+        // ISO日時をMySQLのDATETIME形式に変換
+        const mysqlDatetime = tweet.created_at.replace('T', ' ').replace(/\.\d{3}Z$/, '')
+        
+        await pool.query(
+          'INSERT INTO posts (id_str, text, created_at_x) VALUES (:id_str, :text, :created_at_x) ON DUPLICATE KEY UPDATE text = :text',
+          {
+            id_str: tweet.id,
+            text: tweet.text,
+            created_at_x: mysqlDatetime
+          }
+        )
+        savedCount++
+      }
+    }
+
+    return c.json({ 
+      ok: true, 
+      fetched: data.data?.length || 0,
+      saved: savedCount,
+      tweets: data.data 
+    })
+
+  } catch (e) {
+    console.error('[POST /admin/fetch-posts]', e)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
 
 serve({ fetch: app.fetch, port: 3000 }, (info) => {
   console.log(`🚀 Hono API running at http://localhost:${info.port}`)
 })
-
