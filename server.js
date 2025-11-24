@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
+import { cors } from 'hono/cors'
 import 'dotenv/config'
 import mysql from 'mysql2/promise'
 
@@ -14,6 +15,15 @@ const pool = mysql.createPool({
 })
 
 const app = new Hono()
+
+app.use('/*', cors({
+  origin: ['http://localhost:5173'], // フロントエンドのURL
+  allowHeaders: ['Content-Type', 'Authorization'],
+  allowMethods: ['POST', 'GET', 'OPTIONS', 'DELETE', 'PUT'],
+  exposeHeaders: ['Content-Length'],
+  maxAge: 600,
+  credentials: true,
+}));
 
 // ヘルスチェック
 app.get('/health', (c) => c.json({ ok: true }))
@@ -119,6 +129,137 @@ app.post('/admin/fetch-posts', async (c) => {
   } catch (e) {
     console.error('[POST /admin/fetch-posts]', e)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+// ============ POSTとカテゴリの紐付け ============
+app.post('/admin/categories/:id/posts', async (c) => {
+  try {
+    const categoryId = Number(c.req.param('id'))
+    const body = await c.req.json()
+    const postIds = body.post_ids
+    
+    if (Number.isNaN(categoryId)) {
+      return c.json({ ok: false, error: 'category id must be a number' }, 400)
+    }
+    
+    if (!Array.isArray(postIds) || postIds.length === 0) {
+      return c.json({ ok: false, error: 'post_ids must be a non-empty array' }, 400)
+    }
+    
+    const [categories] = await pool.query(
+      'SELECT id FROM categories WHERE id = :id',
+      { id: categoryId }
+    )
+    
+    if (categories.length === 0) {
+      return c.json({ ok: false, error: 'category not found' }, 404)
+    }
+    
+    let linkedCount = 0
+    for (const postId of postIds) {
+      const [posts] = await pool.query(
+        'SELECT id FROM posts WHERE id = :id',
+        { id: postId }
+      )
+      
+      if (posts.length === 0) {
+        continue
+      }
+      
+      await pool.query(
+        'INSERT IGNORE INTO post_categories (post_id, category_id) VALUES (:post_id, :category_id)',
+        { post_id: postId, category_id: categoryId }
+      )
+      linkedCount++
+    }
+    
+    return c.json({ ok: true, linked: linkedCount })
+    
+  } catch (e) {
+    console.error('[POST /admin/categories/:id/posts]', e)
+    return c.json({ ok: false, error: 'database error' }, 500)
+  }
+})
+
+// ============ POST一覧取得 ============
+app.get('/admin/posts', async (c) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT id, id_str, text, created_at_x, created_at FROM posts ORDER BY created_at_x DESC'
+    )
+    
+    return c.json({ ok: true, items: rows, total: rows.length })
+    
+  } catch (e) {
+    console.error('[GET /admin/posts]', e)
+    return c.json({ ok: false, error: 'database error' }, 500)
+  }
+})
+
+// ============ POST詳細取得 ============
+app.get('/admin/posts/:id', async (c) => {
+  try {
+    const id = Number(c.req.param('id'))
+    
+    if (Number.isNaN(id)) {
+      return c.json({ ok: false, error: 'id must be a number' }, 400)
+    }
+    
+    const [rows] = await pool.query(
+      'SELECT id, id_str, text, created_at_x, created_at FROM posts WHERE id = :id',
+      { id }
+    )
+    
+    if (rows.length === 0) {
+      return c.json({ ok: false, error: 'post not found' }, 404)
+    }
+    
+    return c.json({ ok: true, item: rows[0] })
+    
+  } catch (e) {
+    console.error('[GET /admin/posts/:id]', e)
+    return c.json({ ok: false, error: 'database error' }, 500)
+  }
+})
+
+// ============ カテゴリに紐づくPOST一覧取得 ============
+app.get('/categories/:id/posts', async (c) => {
+  try {
+    const categoryId = Number(c.req.param('id'))
+    
+    if (Number.isNaN(categoryId)) {
+      return c.json({ ok: false, error: 'category id must be a number' }, 400)
+    }
+    
+    const [categories] = await pool.query(
+      'SELECT id, name FROM categories WHERE id = :id',
+      { id: categoryId }
+    )
+    
+    if (categories.length === 0) {
+      return c.json({ ok: false, error: 'category not found' }, 404)
+    }
+    
+    const [posts] = await pool.query(
+      `SELECT p.id, p.id_str, p.text, p.created_at_x, p.created_at
+       FROM posts p
+       INNER JOIN post_categories pc ON p.id = pc.post_id
+       WHERE pc.category_id = :category_id
+       ORDER BY p.created_at_x DESC`,
+      { category_id: categoryId }
+    )
+    
+    return c.json({ 
+      ok: true, 
+      category: categories[0],
+      items: posts, 
+      total: posts.length 
+    })
+    
+  } catch (e) {
+    console.error('[GET /categories/:id/posts]', e)
+    return c.json({ ok: false, error: 'database error' }, 500)
   }
 })
 

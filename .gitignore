@@ -3,3 +3,6 @@ node_modules/
 .env.save
 *.log
 .DS_Store
+*.bak
+*.save
+*_backup.js
